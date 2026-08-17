@@ -6,9 +6,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 LOCAL_MODEL = "llama3.2"
-CLOUD_MODEL = "gpt-oss:120b"
+CLOUD_MODEL = "gpt-oss:120b-cloud"
 
-OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "").strip()
+OLLAMA_API_KEY = os.getenv(
+    "OLLAMA_API_KEY",
+    "",
+).strip()
 
 OLLAMA_HOST = os.getenv(
     "OLLAMA_HOST",
@@ -21,6 +24,9 @@ MODEL_NAME = CLOUD_MODEL if IS_CLOUD else LOCAL_MODEL
 
 
 def _resolve_model(args):
+    if IS_CLOUD:
+        return CLOUD_MODEL
+
     for value in reversed(args):
         if isinstance(value, str):
             value = value.strip()
@@ -28,14 +34,14 @@ def _resolve_model(args):
             if value and " " not in value and len(value) <= 100:
                 return value
 
-    return MODEL_NAME
+    return LOCAL_MODEL
 
 
 def ollama_available(model=None, *args):
-    selected_model = model or _resolve_model(args)
-
     if IS_CLOUD:
         return bool(OLLAMA_API_KEY)
+
+    selected_model = model or _resolve_model(args)
 
     try:
         response = requests.get(
@@ -47,7 +53,10 @@ def ollama_available(model=None, *args):
 
         data = response.json()
 
-        for item in data.get("models", []):
+        for item in data.get(
+            "models",
+            [],
+        ):
             available_model = item.get(
                 "name",
                 item.get("model", ""),
@@ -69,7 +78,10 @@ def generate_ai_response(
     model=None,
     *args,
 ):
-    selected_model = model or _resolve_model(args)
+    if IS_CLOUD:
+        selected_model = CLOUD_MODEL
+    else:
+        selected_model = model or _resolve_model(args)
 
     try:
         if IS_CLOUD:
@@ -97,8 +109,6 @@ def generate_ai_response(
                     f"Ollama Cloud Error: HTTP {response.status_code}: {response.text}"
                 )
 
-            data = response.json()
-
         else:
             response = requests.post(
                 f"{OLLAMA_HOST}/api/chat",
@@ -120,7 +130,7 @@ def generate_ai_response(
                     f"Ollama Local Error: HTTP {response.status_code}: {response.text}"
                 )
 
-            data = response.json()
+        data = response.json()
 
         message = data.get(
             "message",
@@ -128,7 +138,10 @@ def generate_ai_response(
         )
 
         if isinstance(message, dict):
-            content = message.get("content")
+            content = message.get(
+                "content",
+                "",
+            )
 
             if content:
                 return content
@@ -136,7 +149,7 @@ def generate_ai_response(
         return str(data)
 
     except requests.exceptions.Timeout:
-        return "Ollama Error: request timed out."
+        return "Ollama Error: The AI request timed out."
 
     except requests.exceptions.ConnectionError:
         if IS_CLOUD:
@@ -158,7 +171,7 @@ def candidate_analysis(
     *args,
     model=None,
 ):
-    selected_model = model or _resolve_model(args)
+    selected_model = CLOUD_MODEL if IS_CLOUD else (model or _resolve_model(args))
 
     prompt = f"""
 You are an AI recruitment assistant.
@@ -212,7 +225,7 @@ def interview_questions(
     *args,
     model=None,
 ):
-    selected_model = model or _resolve_model(args)
+    selected_model = CLOUD_MODEL if IS_CLOUD else (model or _resolve_model(args))
 
     prompt = f"""
 You are an experienced technical recruiter.
@@ -257,7 +270,7 @@ def ranking_explanation(
     *args,
     model=None,
 ):
-    selected_model = model or _resolve_model(args)
+    selected_model = CLOUD_MODEL if IS_CLOUD else (model or _resolve_model(args))
 
     rank = None
 
@@ -322,12 +335,21 @@ def skill_gap_analysis(
     *args,
     model=None,
 ):
-    selected_model = model or _resolve_model(args)
+    selected_model = CLOUD_MODEL if IS_CLOUD else (model or _resolve_model(args))
 
     candidate_name = None
 
     for value in args:
-        if isinstance(value, str) and value.strip() and value.strip() != selected_model:
+        if (
+            isinstance(value, str)
+            and value.strip()
+            and value.strip()
+            not in {
+                selected_model,
+                LOCAL_MODEL,
+                CLOUD_MODEL,
+            }
+        ):
             candidate_name = value.strip()
             break
 
@@ -368,7 +390,7 @@ def resume_summary(
     *args,
     model=None,
 ):
-    selected_model = model or _resolve_model(args)
+    selected_model = CLOUD_MODEL if IS_CLOUD else (model or _resolve_model(args))
 
     prompt = f"""
 You are a professional resume reviewer.
@@ -401,7 +423,7 @@ def job_description_analysis(
     *args,
     model=None,
 ):
-    selected_model = model or _resolve_model(args)
+    selected_model = CLOUD_MODEL if IS_CLOUD else (model or _resolve_model(args))
 
     prompt = f"""
 You are an expert technical recruiter.
@@ -438,7 +460,7 @@ def candidate_recommendation(
     *args,
     model=None,
 ):
-    selected_model = model or _resolve_model(args)
+    selected_model = CLOUD_MODEL if IS_CLOUD else (model or _resolve_model(args))
 
     if candidate_score is not None:
         score_text = f"Current match score: {candidate_score}%"
@@ -488,7 +510,7 @@ def full_candidate_evaluation(
     *args,
     model=None,
 ):
-    selected_model = model or _resolve_model(args)
+    selected_model = CLOUD_MODEL if IS_CLOUD else (model or _resolve_model(args))
 
     return {
         "analysis": candidate_analysis(
@@ -513,7 +535,6 @@ def full_candidate_evaluation(
 
 if __name__ == "__main__":
     print("SmartScreen AI")
-
     print(f"Model: {MODEL_NAME}")
 
     if IS_CLOUD:
