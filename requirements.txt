@@ -1,0 +1,12 @@
+streamlit
+pandas
+numpy
+psycopg2-binary
+python-dotenv
+pypdf
+python-docx
+openpyxl
+requests
+scikit-learn
+ollama
+sentence-transformers
