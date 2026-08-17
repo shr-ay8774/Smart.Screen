@@ -6,23 +6,25 @@ from dotenv import load_dotenv
 load_dotenv()
 
 LOCAL_MODEL = "llama3.2"
-CLOUD_MODEL = "gpt-oss:120b"
+CLOUD_MODEL = "gpt-oss:120b-cloud"
 
-OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY")
-
-OLLAMA_MODEL = os.getenv(
-    "OLLAMA_MODEL",
-    CLOUD_MODEL if OLLAMA_API_KEY else LOCAL_MODEL,
-)
+OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "").strip()
 
 OLLAMA_HOST = os.getenv(
     "OLLAMA_HOST",
     "http://localhost:11434",
-)
+).strip()
+
+OLLAMA_MODEL = os.getenv(
+    "OLLAMA_MODEL",
+    CLOUD_MODEL if OLLAMA_API_KEY else LOCAL_MODEL,
+).strip()
+
+IS_CLOUD = bool(OLLAMA_API_KEY)
 
 
-def _get_client():
-    if OLLAMA_API_KEY:
+def _create_client():
+    if IS_CLOUD:
         return ollama.Client(
             host="https://ollama.com",
             headers={
@@ -35,15 +37,15 @@ def _get_client():
     )
 
 
-client = _get_client()
+client = _create_client()
 
 
 def _resolve_model(args):
     for value in reversed(args):
-        if isinstance(value, str) and value.strip():
+        if isinstance(value, str):
             value = value.strip()
 
-            if " " not in value and len(value) <= 100:
+            if value and " " not in value and len(value) <= 100:
                 return value
 
     return OLLAMA_MODEL
@@ -52,13 +54,20 @@ def _resolve_model(args):
 def ollama_available(model=None, *args):
     selected_model = model or _resolve_model(args)
 
+    if IS_CLOUD:
+        return bool(OLLAMA_API_KEY)
+
     try:
         response = client.list()
 
         models = getattr(response, "models", [])
 
         for item in models:
-            available_model = getattr(item, "model", "")
+            available_model = getattr(
+                item,
+                "model",
+                "",
+            )
 
             if available_model == selected_model or available_model.startswith(
                 selected_model + ":"
@@ -66,7 +75,10 @@ def ollama_available(model=None, *args):
                 return True
 
         if isinstance(response, dict):
-            for item in response.get("models", []):
+            for item in response.get(
+                "models",
+                [],
+            ):
                 available_model = item.get(
                     "name",
                     item.get("model", ""),
@@ -83,7 +95,11 @@ def ollama_available(model=None, *args):
         return False
 
 
-def generate_ai_response(prompt, model=None, *args):
+def generate_ai_response(
+    prompt,
+    model=None,
+    *args,
+):
     selected_model = model or _resolve_model(args)
 
     try:
@@ -104,22 +120,28 @@ def generate_ai_response(prompt, model=None, *args):
                 None,
             )
 
-            if content is not None:
+            if content:
                 return content
 
         if isinstance(response, dict):
-            return response.get(
+            message = response.get(
                 "message",
                 {},
-            ).get(
-                "content",
-                str(response),
             )
+
+            if isinstance(message, dict):
+                return message.get(
+                    "content",
+                    str(response),
+                )
 
         return str(response)
 
     except Exception as e:
-        return f"AI Error: {e!s}"
+        if IS_CLOUD:
+            return f"Ollama Cloud Error: {e!s}"
+
+        return f"Ollama Local Error: {e!s}"
 
 
 def candidate_analysis(
@@ -133,7 +155,8 @@ def candidate_analysis(
     prompt = f"""
 You are an AI recruitment assistant.
 
-Analyze the candidate's resume against the provided job description.
+Analyze the candidate's resume against
+the provided job description.
 
 JOB DESCRIPTION:
 {job_description}
@@ -164,7 +187,8 @@ Not Recommended
 11. Reason
 
 Do not invent information.
-Use only the resume and job description.
+Use only information present in the
+resume and job description.
 Be objective.
 """
 
@@ -193,18 +217,22 @@ CANDIDATE RESUME:
 
 Generate 5 questions for each category:
 
-1. General
-2. Technical
-3. Resume-Based
-4. Behavioral
-5. Role-Specific
+1. General Questions
+2. Technical Questions
+3. Resume-Based Questions
+4. Behavioral Questions
+5. Role-Specific Questions
 
-For every question, explain:
+For every question provide:
 
 Question:
 What the interviewer should evaluate:
 
-Do not invent projects or experience.
+Questions must be based only on
+the resume and job description.
+
+Do not invent projects, experience,
+skills, or achievements.
 """
 
     return generate_ai_response(
@@ -226,7 +254,10 @@ def ranking_explanation(
     rank = None
 
     for value in args:
-        if isinstance(value, (int, float)):
+        if isinstance(
+            value,
+            (int, float),
+        ):
             rank = value
 
     rank_text = f"Candidate Rank: #{rank}" if rank is not None else ""
@@ -267,8 +298,8 @@ Consider
 Not Recommended
 
 Do not invent information.
-Base the explanation only on the resume
-and job description.
+Base the explanation only on the
+resume and job description.
 """
 
     return generate_ai_response(
@@ -348,6 +379,7 @@ Provide:
 7. Key Strengths
 
 Do not invent information.
+Use only information present in the resume.
 """
 
     return generate_ai_response(
@@ -400,14 +432,14 @@ def candidate_recommendation(
 ):
     selected_model = model or _resolve_model(args)
 
-    score_text = (
-        f"Current match score: {candidate_score}%"
-        if candidate_score is not None
-        else "No existing match score was provided."
-    )
+    if candidate_score is not None:
+        score_text = f"Current match score: {candidate_score}%"
+    else:
+        score_text = "No existing match score was provided."
 
     prompt = f"""
-You are an expert recruitment decision assistant.
+You are an expert recruitment
+decision assistant.
 
 JOB DESCRIPTION:
 {job_description}
@@ -456,10 +488,12 @@ def full_candidate_evaluation(
             job_description,
             model=selected_model,
         ),
-        "interview_questions": interview_questions(
-            resume_text,
-            job_description,
-            model=selected_model,
+        "interview_questions": (
+            interview_questions(
+                resume_text,
+                job_description,
+                model=selected_model,
+            )
         ),
         "skill_gap": skill_gap_analysis(
             resume_text,
@@ -472,14 +506,14 @@ def full_candidate_evaluation(
 if __name__ == "__main__":
     print("Checking Ollama...")
 
-    print(f"Using model: {OLLAMA_MODEL}")
+    print(f"Model: {OLLAMA_MODEL}")
 
-    if OLLAMA_API_KEY:
-        print("Using Ollama Cloud API.")
+    if IS_CLOUD:
+        print("Mode: Ollama Cloud")
     else:
-        print("Using local Ollama.")
+        print("Mode: Local Ollama")
 
     if ollama_available():
-        print(f"Ollama is available with model: {OLLAMA_MODEL}")
+        print("Ollama connection is ready.")
     else:
-        print(f"Ollama model '{OLLAMA_MODEL}' is not available.")
+        print("Ollama connection is unavailable.")
