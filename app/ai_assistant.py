@@ -1,12 +1,12 @@
 import os
 
-import ollama
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
 LOCAL_MODEL = "llama3.2"
-CLOUD_MODEL = "gpt-oss:120b-cloud"
+CLOUD_MODEL = "gpt-oss:120b"
 
 OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "").strip()
 
@@ -15,29 +15,9 @@ OLLAMA_HOST = os.getenv(
     "http://localhost:11434",
 ).strip()
 
-OLLAMA_MODEL = os.getenv(
-    "OLLAMA_MODEL",
-    CLOUD_MODEL if OLLAMA_API_KEY else LOCAL_MODEL,
-).strip()
-
 IS_CLOUD = bool(OLLAMA_API_KEY)
 
-
-def _create_client():
-    if IS_CLOUD:
-        return ollama.Client(
-            host="https://ollama.com",
-            headers={
-                "Authorization": f"Bearer {OLLAMA_API_KEY}",
-            },
-        )
-
-    return ollama.Client(
-        host=OLLAMA_HOST,
-    )
-
-
-client = _create_client()
+MODEL_NAME = CLOUD_MODEL if IS_CLOUD else LOCAL_MODEL
 
 
 def _resolve_model(args):
@@ -48,7 +28,7 @@ def _resolve_model(args):
             if value and " " not in value and len(value) <= 100:
                 return value
 
-    return OLLAMA_MODEL
+    return MODEL_NAME
 
 
 def ollama_available(model=None, *args):
@@ -58,36 +38,25 @@ def ollama_available(model=None, *args):
         return bool(OLLAMA_API_KEY)
 
     try:
-        response = client.list()
+        response = requests.get(
+            f"{OLLAMA_HOST}/api/tags",
+            timeout=10,
+        )
 
-        models = getattr(response, "models", [])
+        response.raise_for_status()
 
-        for item in models:
-            available_model = getattr(
-                item,
-                "model",
-                "",
+        data = response.json()
+
+        for item in data.get("models", []):
+            available_model = item.get(
+                "name",
+                item.get("model", ""),
             )
 
             if available_model == selected_model or available_model.startswith(
                 selected_model + ":"
             ):
                 return True
-
-        if isinstance(response, dict):
-            for item in response.get(
-                "models",
-                [],
-            ):
-                available_model = item.get(
-                    "name",
-                    item.get("model", ""),
-                )
-
-                if available_model == selected_model or available_model.startswith(
-                    selected_model + ":"
-                ):
-                    return True
 
         return False
 
@@ -103,45 +72,84 @@ def generate_ai_response(
     selected_model = model or _resolve_model(args)
 
     try:
-        response = client.chat(
-            model=selected_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": str(prompt),
-                }
-            ],
+        if IS_CLOUD:
+            response = requests.post(
+                "https://ollama.com/api/chat",
+                headers={
+                    "Authorization": (f"Bearer {OLLAMA_API_KEY}"),
+                    "Content-Type": ("application/json"),
+                },
+                json={
+                    "model": selected_model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": str(prompt),
+                        }
+                    ],
+                    "stream": False,
+                },
+                timeout=300,
+            )
+
+            if not response.ok:
+                return (
+                    f"Ollama Cloud Error: HTTP {response.status_code}: {response.text}"
+                )
+
+            data = response.json()
+
+        else:
+            response = requests.post(
+                f"{OLLAMA_HOST}/api/chat",
+                json={
+                    "model": selected_model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": str(prompt),
+                        }
+                    ],
+                    "stream": False,
+                },
+                timeout=300,
+            )
+
+            if not response.ok:
+                return (
+                    f"Ollama Local Error: HTTP {response.status_code}: {response.text}"
+                )
+
+            data = response.json()
+
+        message = data.get(
+            "message",
+            {},
         )
 
-        if hasattr(response, "message"):
-            content = getattr(
-                response.message,
-                "content",
-                None,
-            )
+        if isinstance(message, dict):
+            content = message.get("content")
 
             if content:
                 return content
 
-        if isinstance(response, dict):
-            message = response.get(
-                "message",
-                {},
-            )
+        return str(data)
 
-            if isinstance(message, dict):
-                return message.get(
-                    "content",
-                    str(response),
-                )
+    except requests.exceptions.Timeout:
+        return "Ollama Error: request timed out."
 
-        return str(response)
+    except requests.exceptions.ConnectionError:
+        if IS_CLOUD:
+            return "Ollama Cloud Error: Could not connect to Ollama Cloud."
+
+        return (
+            "Ollama Local Error: "
+            "Could not connect to Ollama. "
+            "Make sure Ollama is running."
+        )
 
     except Exception as e:
-        if IS_CLOUD:
-            return f"Ollama Cloud Error: {e!s}"
-
-        return f"Ollama Local Error: {e!s}"
+        return f"Ollama Error: {e!s}"
 
 
 def candidate_analysis(
@@ -504,16 +512,16 @@ def full_candidate_evaluation(
 
 
 if __name__ == "__main__":
-    print("Checking Ollama...")
+    print("SmartScreen AI")
 
-    print(f"Model: {OLLAMA_MODEL}")
+    print(f"Model: {MODEL_NAME}")
 
     if IS_CLOUD:
-        print("Mode: Ollama Cloud")
+        print("Mode: Ollama Cloud API")
     else:
         print("Mode: Local Ollama")
 
     if ollama_available():
-        print("Ollama connection is ready.")
+        print("AI connection is ready.")
     else:
-        print("Ollama connection is unavailable.")
+        print("AI connection is unavailable.")
